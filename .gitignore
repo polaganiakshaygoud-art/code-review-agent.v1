@@ -1,0 +1,5 @@
+﻿node_modules/
+dist/
+.env
+hindsight_vault.json
+*.log
