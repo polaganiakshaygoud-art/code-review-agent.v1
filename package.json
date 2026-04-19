@@ -10,7 +10,7 @@
     "build-frontend": "cd frontend && npm run build",
     "install-all": "npm run install-backend && npm run install-frontend",
     "postinstall": "npm run install-all",
-    "build": "npm run build-frontend",
+    "build": "npm run install-all && npm run build-frontend",
     "start": "node backend/server.js"
   },
   "engines": {
