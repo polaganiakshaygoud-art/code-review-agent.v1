@@ -32,6 +32,11 @@ const GROQ_MODEL = process.env.GROQ_MODEL || "qwen/qwen3-32b";
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
+// ── DEPLOYMENT CHECK ──
+if (!process.env.GROQ_API_KEY && process.env.NODE_ENV === "production") {
+  console.warn("WARNING: GROQ_API_KEY is not set. AI features will fail.");
+}
+
 // ── INVISIBLE HINDSIGHT VAULT ──
 const VAULT_PATH = path.join(__dirname, "hindsight_vault.json");
 
@@ -82,6 +87,10 @@ async function getModernizedCode(code, language, targetVersion, previousContext 
       "lineStart": number,
       "lineEnd": number,
       "reason": "short explanation",
+      "detailedReason": "full technical explanation of why this change is needed",
+      "benefits": ["performance improve", "better readability", "modern syntax"],
+      "useCase": "practical example or context of use",
+      "riskLevel": "Low" | "Medium" | "High",
       "suggestedFix": "corrected code snippet"
     }
   ],
@@ -231,11 +240,57 @@ router.post("/analyze", async (req, res) => {
   }
 });
 
+router.post("/chat", async (req, res) => {
+  try {
+    const { message, codeSnippet, issueDetail } = req.body;
+    
+    if (!message) {
+      return res.status(400).json({ error: "Message is required" });
+    }
+
+    const systemPrompt = `You are an expert AI coding assistant specializing in Java modernization. 
+    You are helping a developer understand a specific code modernization issue.
+    
+    CONTEXT ABOUT THE ISSUE:
+    ${JSON.stringify(issueDetail, null, 2)}
+    
+    THE CODE SNIPPET:
+    ${codeSnippet}
+    
+    Respond in a professional, helpful, and concise manner. Use markdown for code formatting.`;
+
+    const response = await axios.post(
+      GROQ_API_URL,
+      {
+        model: GROQ_MODEL,
+        messages: [{ role: "user", content: systemPrompt + "\n\nUSER QUESTION: " + message }],
+        temperature: 0.5
+      },
+      {
+        timeout: 30000,
+        httpAgent,
+        httpsAgent,
+        headers: {
+          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    const reply = response.data?.choices?.[0]?.message?.content;
+    return res.json({ success: true, reply });
+  } catch (err) {
+    console.error("CHAT ENDPOINT ERROR:", err);
+    return res.status(500).json({ error: "Failed to process chat message" });
+  }
+});
+
 // ── CATCH-ALL ROUTE FOR SPA ──
 app.get("*", (req, res) => {
   res.sendFile(path.join(distPath, "index.html"));
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Server running in ${process.env.NODE_ENV || 'development'} mode`);
+  console.log(`🔗 Access at http://0.0.0.0:${PORT}`);
 });

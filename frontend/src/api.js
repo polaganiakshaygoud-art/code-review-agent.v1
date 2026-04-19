@@ -36,3 +36,18 @@ export async function analyzeCode(code, language = "java", targetVersion = "21",
     }
   }
 }
+
+export async function chatWithAi(message, codeSnippet, issueDetail) {
+  try {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, codeSnippet, issueDetail })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Chat failed");
+    return data;
+  } catch (err) {
+    throw new Error(err.message);
+  }
+}

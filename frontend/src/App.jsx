@@ -1,59 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import Editor, { DiffEditor } from "@monaco-editor/react";
-import { analyzeCode } from "./api";
+import { analyzeCode, chatWithAi } from "./api";
 
-const DEFAULT_CODE = `import java.util.Date;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.text.SimpleDateFormat;
-
-public class EmployeeManager {
-
-    private Date joiningDate = new Date();
-    private ArrayList employees = new ArrayList();
-
-    public String getEmployeeName(String name) {
-        if (name != null) {
-            return name.toUpperCase();
-        } else {
-            return "UNKNOWN";
-        }
-    }
-
-    public void printAllEmployees(List<String> empList) {
-        for (int i = 0; i < empList.size(); i++) {
-            System.out.println("Employee: " + empList.get(i));
-        }
-    }
-
-    public String getDepartmentCode(String dept) {
-        String code;
-        switch (dept) {
-            case "Engineering": code = "ENG"; break;
-            case "Marketing":   code = "MKT"; break;
-            default:            code = "UNK";
-        }
-        return code;
-    }
-
-    public String formatDate(Date date) {
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
-        return sdf.format(date);
-    }
-
-    public void processObject(Object obj) {
-        if (obj instanceof String) {
-            String s = (String) obj;
-            System.out.println("String length: " + s.length());
-        } else if (obj instanceof Integer) {
-            Integer i = (Integer) obj;
-            System.out.println("Integer value: " + i);
-        }
-    }
-}`;
+const DEFAULT_CODE = `// Drop a .java file here or start typing...
+`;
 
 const AGENT_ICON = (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -72,7 +22,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [analysis, setAnalysis] = useState(null);
-  const [fileName, setFileName] = useState("EmployeeManager.java");
+  const [fileName, setFileName] = useState(null);
   const [selectedIssue, setSelectedIssue] = useState(null);
   const [scanProgress, setScanProgress] = useState(0);
   const [modernScore, setModernScore] = useState(null);
@@ -80,6 +30,9 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [viewMode, setViewMode] = useState("editor"); 
   const [targetVersion, setTargetVersion] = useState("21");
+  const [isDragging, setIsDragging] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
   
   const editorRef = useRef(null);
   const monacoRef = useRef(null);
@@ -108,6 +61,29 @@ export default function App() {
     reader.onload = (e) => setCode(e.target.result);
     reader.readAsText(file);
   }
+
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      loadFile(files[0]);
+    }
+  }, []);
 
   function startScanAnimation() {
     setScanProgress(0);
@@ -168,6 +144,27 @@ export default function App() {
     }
   }
 
+  async function handleChat(msg = null) {
+    const text = msg || chatInput;
+    if (!text?.trim() || !selectedIssue) return;
+    
+    setChatLoading(true);
+    setChatInput("");
+    setAiChat(prev => [...prev, { role: "user", text }]);
+
+    try {
+      const codeSnippet = code.split("\n").slice(selectedIssue.lineStart - 1, selectedIssue.lineEnd).join("\n");
+      const response = await chatWithAi(text, codeSnippet, selectedIssue);
+      if (response?.reply) {
+        setAiChat(prev => [...prev, { role: "agent", text: response.reply }]);
+      }
+    } catch (err) {
+      setAiChat(prev => [...prev, { role: "error", text: "Failed to get AI response." }]);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
   function handleAutoUpdateAll() {
     if (analysis?.refactoredCode) {
       setCode(analysis.refactoredCode);
@@ -197,7 +194,7 @@ export default function App() {
   const handleReset = () => {
     setCode(DEFAULT_CODE);
     setPrevCode("");
-    setFileName("EmployeeManager.java");
+    setFileName(null);
     setAnalysis(null);
     setSelectedIssue(null);
     setModernScore(null);
@@ -209,7 +206,21 @@ export default function App() {
   const lineCount = code.split("\n").length;
 
   return (
-    <div style={s.root}>
+    <div 
+      style={s.root}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDragging && (
+        <div style={s.dragOverlay}>
+          <div style={s.dragBox}>
+            <div style={s.dragIcon}>{AGENT_ICON}</div>
+            <div style={s.dragText}>Drop Java File to Review</div>
+            <div style={s.dragSubText}>Supports .java files</div>
+          </div>
+        </div>
+      )}
       {scanProgress > 0 && <div style={{ ...s.scanBar, width: `${scanProgress}%` }} />}
 
       <nav style={s.topNav}>
@@ -218,7 +229,7 @@ export default function App() {
           <span style={s.navBreadcrumb}>
             <span style={s.breadcrumbSeg}>agent</span>
             <span style={s.breadcrumbSlash}>/</span>
-            <span style={s.breadcrumbFile}>{fileName}</span>
+            <span style={s.breadcrumbFile}>{fileName || "no file selected"}</span>
           </span>
         </div>
         <div style={s.navRight}>
@@ -257,16 +268,28 @@ export default function App() {
               <span style={s.sidebarTitle}>ACTIVE FILE</span>
               <button style={s.iconBtn} onClick={() => fileInputRef.current?.click()}>＋</button>
             </div>
-            <div style={s.fileItemActive}>📄 {fileName}</div>
+            {fileName ? (
+              <div style={s.fileItemActive}>📄 {fileName}</div>
+            ) : (
+              <div style={s.fileItemVirtual} onClick={() => fileInputRef.current?.click()}>
+                <span style={s.virtualPlus}>＋</span>
+                <div style={s.virtualText}>
+                  <div style={s.virtualMain}>Drop .java file</div>
+                  <div style={s.virtualSub}>or click to browse</div>
+                </div>
+              </div>
+            )}
             <input ref={fileInputRef} type="file" accept=".java" onChange={e => { loadFile(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
             
             <div style={s.divider} />
             <div style={s.sidebarHeader}><span style={s.sidebarTitle}>ANOMALIES</span></div>
             <div style={s.issueScroll}>
               {analysis?.issues?.map((issue, idx) => (
-                <div key={idx} style={s.issueItem} onClick={() => { setViewMode("split"); setSelectedIssue(issue); }}>
+                <div key={idx} style={{...s.issueItem, borderColor: issue.riskLevel === "High" ? "#ef4444" : "#1e2030"}} onClick={() => { setViewMode("split"); setSelectedIssue(issue); }}>
                   <div style={s.issueItemTop}>
-                    <span style={s.issueLineTag}>Anomaly @ L{issue.lineStart}</span>
+                    <span style={{...s.issueLineTag, color: issue.riskLevel === "High" ? "#ef4444" : "#f59e0b"}}>
+                      {issue.riskLevel === "High" ? "🚨 CRITICAL" : "⚠️ ANOMALY"} @ L{issue.lineStart}
+                    </span>
                   </div>
                   <p style={s.issueItemReason}>{issue.reason}</p>
                 </div>
@@ -333,21 +356,64 @@ export default function App() {
         <aside style={s.aiPanel}>
           <div style={s.aiHeader}><span style={s.aiTitle}>🤖 INSIGHTS</span></div>
           <div style={s.aiBody}>
-            {aiChat.map((msg, idx) => (
-              <div key={idx} style={msg.role === "error" ? s.aiError : s.aiMsg}>
-                <p style={{ ...s.aiMsgText, color: msg.role === "system" ? "#10b981" : "#e2e8f0" }}>{msg.text}</p>
-              </div>
-            ))}
-            {analysis?.error && <div style={s.aiError}>{analysis.error}</div>}
-            
-            {selectedIssue && (
+            {selectedIssue ? (
               <div style={s.selectedIssueBox}>
-                <span style={s.boxLabel}>ANOMALY</span>
-                <p style={s.boxText}>{selectedIssue.reason}</p>
-                <span style={{ ...s.boxLabel, marginTop: "0.8rem", display: "block" }}>SUGGESTED REFACTOR</span>
+                <div style={s.boxHeader}>
+                  <span style={s.boxLabel}>TECHNICAL ANALYSIS</span>
+                  <span style={{...s.riskBadge, background: selectedIssue.riskLevel === "High" ? "#ef4444" : "#f59e0b"}}>
+                    {selectedIssue.riskLevel} Risk
+                  </span>
+                </div>
+                
+                <p style={s.detailedReason}>{selectedIssue.detailedReason}</p>
+                
+                <div style={s.benefitGrid}>
+                  {selectedIssue.benefits?.map((b, i) => (
+                    <div key={i} style={s.benefitItem}>✨ {b}</div>
+                  ))}
+                </div>
+
+                <div style={{...s.divider, margin: "1rem 0", opacity: 0.1}} />
+                
+                <span style={s.boxLabel}>SUGGESTED REFACTOR</span>
                 <pre style={s.boxFix}>{selectedIssue.suggestedFix}</pre>
+
+                <div style={s.actionBtns}>
+                  <button onClick={() => handleChat("Why is this modernization necessary?")} style={s.actionBtn}>Why update?</button>
+                  <button onClick={() => handleChat("Show me an edge case for this fix")} style={s.actionBtn}>Edge cases?</button>
+                  <button onClick={() => handleChat("Are there any risks with this change?")} style={s.actionBtn}>Risks?</button>
+                </div>
+              </div>
+            ) : (
+              <div style={s.chatItems}>
+                {aiChat.map((msg, idx) => (
+                  <div key={idx} style={msg.role === "error" ? s.aiError : msg.role === "agent" ? s.aiMsg : s.userMsg}>
+                    <p style={{ ...s.aiMsgText, color: msg.role === "agent" ? "#10b981" : msg.role === "user" ? "#fff" : "#ef4444" }}>
+                      {msg.role === "user" ? "👤 You: " : "🤖 Agent: "}{msg.text}
+                    </p>
+                  </div>
+                ))}
               </div>
             )}
+            {analysis?.error && <div style={s.aiError}>{analysis.error}</div>}
+          </div>
+          
+          <div style={s.chatInputArea}>
+             <input 
+               style={s.chatInput} 
+               placeholder={selectedIssue ? "Ask about this issue..." : "Start review to chat..."}
+               value={chatInput}
+               onChange={(e) => setChatInput(e.target.value)}
+               onKeyDown={(e) => e.key === "Enter" && handleChat()}
+               disabled={chatLoading || !selectedIssue}
+             />
+             <button 
+               style={{...s.sendBtn, opacity: chatLoading ? 0.5 : 1}} 
+               onClick={() => handleChat()}
+               disabled={chatLoading || !selectedIssue}
+             >
+               {chatLoading ? "..." : "➔"}
+             </button>
           </div>
           <div style={s.aiFooter}>
             <div style={s.footerStat}>
@@ -401,7 +467,26 @@ const s = {
   sidebarContent: { flex: 1, overflowY: "auto" },
   sidebarHeader: { padding: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" },
   sidebarTitle: { fontSize: "0.65rem", color: "#4b5563", fontWeight: 800, letterSpacing: "1px" },
-  fileItemActive: { padding: "0.8rem 1rem", fontSize: "0.8rem", color: "#10b981", background: "rgba(16,185,129,0.05)", fontWeight: 600 },
+  fileItemActive: { padding: "0.8rem 1rem", fontSize: "0.8rem", color: "#10b981", background: "rgba(16,185,129,0.05)", fontWeight: 600, borderLeft: "3px solid #10b981" },
+  fileItemVirtual: { 
+    margin: "0.5rem 0.8rem", 
+    padding: "1rem", 
+    fontSize: "0.75rem", 
+    color: "#4b5563", 
+    border: "1px dashed #1e2030", 
+    borderRadius: 8, 
+    cursor: "pointer", 
+    display: "flex", 
+    alignItems: "center", 
+    gap: "0.8rem",
+    transition: "all 0.2s ease",
+    background: "rgba(255,255,255,0.01)"
+  },
+  "fileItemVirtual:hover": { borderColor: "#10b981", color: "#9ca3af", background: "rgba(16,185,129,0.03)" },
+  virtualPlus: { fontSize: "1.2rem", color: "#10b981", opacity: 0.7 },
+  virtualText: { display: "flex", flexDirection: "column" },
+  virtualMain: { fontWeight: 700, letterSpacing: "0.5px" },
+  virtualSub: { fontSize: "0.6rem", opacity: 0.5, marginTop: "2px" },
   iconBtn: { background: "none", border: "none", color: "#6b7280", fontSize: "1.2rem", cursor: "pointer" },
   divider: { height: "1px", background: "#1e2030" },
   issueScroll: { padding: "0.5rem" },
@@ -434,5 +519,63 @@ const s = {
   aiFooter: { display: "flex", justifyContent: "space-around", padding: "1rem", borderTop: "1px solid #1e2030" },
   footerStat: { textAlign: "center" },
   footerNum: { display: "block", fontSize: "1rem", fontWeight: 800 },
-  footerLbl: { display: "block", fontSize: "0.6rem", color: "#4b5563", fontWeight: 800 }
+  footerLbl: { display: "block", fontSize: "0.6rem", color: "#4b5563", fontWeight: 800 },
+
+  detailedReason: { fontSize: "0.8rem", lineHeight: 1.6, color: "#9ca3af", marginTop: "0.5rem" },
+  benefitGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", marginTop: "1rem" },
+  benefitItem: { fontSize: "0.65rem", padding: "0.4rem", background: "rgba(16,185,129,0.05)", borderRadius: 4, color: "#10b981", fontWeight: 600 },
+  boxHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" },
+  riskBadge: { fontSize: "0.5rem", padding: "0.2rem 0.5rem", borderRadius: 10, color: "#000", fontWeight: 900, textTransform: "uppercase" },
+  
+  actionBtns: { display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "1rem" },
+  actionBtn: { padding: "0.3rem 0.6rem", background: "rgba(255,255,255,0.03)", border: "1px solid #1e2030", borderRadius: 4, color: "#9ca3af", fontSize: "0.6rem", cursor: "pointer", fontWeight: 600 },
+  
+  chatInputArea: { padding: "0.8rem", borderTop: "1px solid #1e2030", display: "flex", gap: "0.5rem", background: "#0e0e16" },
+  chatInput: { flex: 1, background: "#0a0a0f", border: "1px solid #1e2030", borderRadius: 6, padding: "0.5rem", fontSize: "0.75rem", color: "#fff", outline: "none" },
+  sendBtn: { width: "32px", height: "32px", borderRadius: 6, background: "#10b981", border: "none", color: "#000", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900 },
+  
+  userMsg: { alignSelf: "flex-end", background: "rgba(255,255,255,0.03)", padding: "0.75rem", borderRadius: "10px 10px 0 10px", marginBottom: "0.8rem", border: "1px solid #1e2030" },
+  chatItems: { display: "flex", flexDirection: "column" },
+
+  dragOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    background: "rgba(10, 10, 15, 0.9)",
+    zIndex: 1000,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    backdropFilter: "blur(8px)",
+    transition: "all 0.3s ease",
+    border: "2px dashed #10b981",
+    margin: "10px",
+    borderRadius: "12px",
+    pointerEvents: "none"
+  },
+  dragBox: {
+    textAlign: "center",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "1rem"
+  },
+  dragIcon: {
+    transform: "scale(2.5)",
+    marginBottom: "1rem",
+    filter: "drop-shadow(0 0 10px #10b981)"
+  },
+  dragText: {
+    fontSize: "1.5rem",
+    fontWeight: 800,
+    color: "#fff",
+    letterSpacing: "1px"
+  },
+  dragSubText: {
+    fontSize: "0.9rem",
+    color: "#4b5563",
+    fontWeight: 600
+  }
 };
